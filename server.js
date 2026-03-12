@@ -17,43 +17,40 @@ const app = express();
 const userState = new Map();
 
 // --- CONFIGURACIÓN DE RUTAS Y ENTORNO ---
-const AUTH_DIR = 'auth';
-const DATA_DIR = 'data';
+const AUTH_DIR = path.join(__dirname, 'auth');
+const DATA_DIR = path.join(__dirname, 'data');
 const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
 
 // Detectar si estamos en Railway o en Windows (Local)
 const isRailway = process.env.RAILWAY_ENVIRONMENT === 'production';
-// En Railway usamos el Python del entorno virtual, en PC el global
+
+/**
+ * IMPORTANTE: Esta es la ruta al ejecutable de Python.
+ * En Railway, usamos el que está dentro del entorno virtual (.venv) 
+ * que creamos con nixpacks.toml.
+ */
 const pythonPath = isRailway ? '/app/.venv/bin/python' : 'python';
 
-// Asegurar que las carpetas existan para evitar errores de escritura
-if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR);
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
-
-// --- EJEMPLO DE CÓMO USAR EL SPAWN CORREGIDO ---
-// Cuando necesites llamar a tu main.py, hazlo así:
-/*
-const pythonProcess = spawn(pythonPath, ['main.py', argumento1, argumento2]);
-*/
-
-console.log(`[SISTEMA] Entorno: ${isRailway ? 'Railway' : 'Local (Windows)'}`);
-console.log(`[SISTEMA] Usando Python en: ${pythonPath}`);
+// Asegurar que las carpetas existan al iniciar
+if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 let sock;
 let qrCodeData = null;
 let connectionStatus = "Desconectado";
 let consoleBuffer = [];
 
-// Asegurar que existe el directorio de datos
-if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+console.log(`[SISTEMA] Entorno: ${isRailway ? 'RAILWAY' : 'LOCAL (Windows)'}`);
+console.log(`[SISTEMA] Usando ejecutable Python en: ${pythonPath}`);
 
-// Función para guardar logs en JSON
+// --- FUNCIONES DE LOGGING ---
+
 function saveLog(url, title, status, error = null) {
     let logs = [];
     if (fs.existsSync(LOGS_FILE)) {
-        logs = JSON.parse(fs.readFileSync(LOGS_FILE, 'utf8'));
+        try {
+            logs = JSON.parse(fs.readFileSync(LOGS_FILE, 'utf8'));
+        } catch (e) { logs = []; }
     }
     
     const newLog = {
@@ -67,28 +64,21 @@ function saveLog(url, title, status, error = null) {
     
     logs.unshift(newLog);
     fs.writeFileSync(LOGS_FILE, JSON.stringify(logs.slice(0, 100), null, 2));
-    
-    // Agregar a buffer de consola
     addConsoleLog(`[${status}] ${url}`);
 }
 
-// Función para agregar línea a la consola en tiempo real
 function addConsoleLog(message) {
     const logLine = {
         timestamp: new Date().toISOString(),
         message
     };
     consoleBuffer.unshift(logLine);
-    
-    // Guardar últimas 500 líneas
-    if (consoleBuffer.length > 500) {
-        consoleBuffer = consoleBuffer.slice(0, 500);
-    }
-    
-    console.log(`[CONSOLE] ${message}`);
+    if (consoleBuffer.length > 500) consoleBuffer = consoleBuffer.slice(0, 500);
+    console.log(`[LOG] ${message}`);
 }
 
-// --- MIDDLEWARES Y RUTAS WEB ---
+// --- SERVIDOR WEB ---
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => {
@@ -97,7 +87,9 @@ app.get('/', (req, res) => {
 
 app.get('/api/info', async (req, res) => {
     let qrImg = null;
-    if (qrCodeData) qrImg = await QRCode.toDataURL(qrCodeData);
+    try {
+        if (qrCodeData) qrImg = await QRCode.toDataURL(qrCodeData);
+    } catch (e) { console.error("Error generando QR DataURL", e); }
 
     let history = [];
     if (fs.existsSync(LOGS_FILE)) {
@@ -115,6 +107,7 @@ app.get('/api/info', async (req, res) => {
 });
 
 // --- LÓGICA DE WHATSAPP ---
+
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version } = await fetchLatestBaileysVersion();
@@ -125,7 +118,7 @@ async function startBot() {
         version,
         auth: state,
         logger: pino({ level: 'silent' }),
-        browser: ['wabot', 'Chrome', '1.0.0']
+        browser: ['WABOT', 'Chrome', '1.0.0']
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -137,22 +130,27 @@ async function startBot() {
             qrCodeData = qr;
             connectionStatus = "Esperando QR";
             qrcodeTerminal.generate(qr, { small: true });
-            addConsoleLog("Esperando escaneo de QR...");
+            addConsoleLog("QR generado. Por favor, escanea con tu celular.");
         }
 
         if (connection === 'open') {
             qrCodeData = null;
             connectionStatus = "Conectado";
-            console.log('✅ WhatsApp conectado');
-            addConsoleLog("✅ WhatsApp conectado");
+            addConsoleLog("✅ WhatsApp Conectado Correctamente");
         }
 
         if (connection === 'close') {
-            const code = lastDisconnect?.error?.output?.statusCode;
-            connectionStatus = "Reconectando...";
-            addConsoleLog(`⚠️ Desconectado. Reconectando en 5s...`);
-            if (code === 401) fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-            setTimeout(startBot, 5000);
+            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+            connectionStatus = "Desconectado";
+            addConsoleLog(`⚠️ Conexión cerrada. ¿Reconectando?: ${shouldReconnect}`);
+            
+            if (shouldReconnect) {
+                setTimeout(startBot, 5000);
+            } else {
+                addConsoleLog("❌ Sesión cerrada permanentemente. Borrando datos de autenticación...");
+                fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+                setTimeout(startBot, 2000);
+            }
         }
     });
 
@@ -165,25 +163,27 @@ async function startBot() {
 
         if (!text) return;
 
-        addConsoleLog(`📨 Mensaje de ${jid.split('@')[0]}: ${text.substring(0, 50)}`);
+        addConsoleLog(`📩 Mensaje de ${jid.replace('@s.whatsapp.net', '')}: ${text.substring(0, 30)}...`);
 
-        // Manejo de descargas
-        const handled = await dl.handleDownload(sock, m, userState, saveLog, addConsoleLog);
+        /**
+         * NOTA: He agregado 'pythonPath' como argumento. 
+         * Asegúrate de actualizar tu archivo dl.js para que reciba este parámetro 
+         * y lo use en el spawn de main.py.
+         */
+        const handled = await dl.handleDownload(sock, m, userState, saveLog, addConsoleLog, pythonPath);
 
-        // Respuesta por defecto
-        if (!handled) {
+        if (!handled && !m.key.remoteJid.endsWith('@g.us')) {
             await sock.sendMessage(jid, { 
-                text: "🎥 *WABOT*\n\nEnvíame una URL para descargar el video." 
+                text: "🎥 *WABOT - BOLIVIA*\n\nHola. Envíame un enlace de YouTube o TikTok para descargarlo." 
             });
         }
     });
 }
 
-// Inicializar bot
+// Iniciar
 startBot();
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-    console.log(`🌐 wabot en puerto ${PORT}`);
-    addConsoleLog("🚀 wabot iniciado");
+app.listen(PORT, '0.0.0.0', () => {
+    addConsoleLog(`🚀 Servidor Web escuchando en puerto ${PORT}`);
 });
