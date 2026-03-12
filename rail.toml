@@ -1,0 +1,6 @@
+[project]
+name = "mi_app_node"
+type = "nodejs"
+
+[start]
+command = "node server.js"
