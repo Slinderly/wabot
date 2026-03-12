@@ -1,11 +1,11 @@
 [phases.setup]
-nixPkgs = ['nodejs', 'python3', 'ffmpeg']
+nixPkgs = ['nodejs', 'python3', 'python311Packages.pip', 'ffmpeg']
 
 [phases.install]
 cmds = [
     'npm install',
-    'python3 -m venv /app/.venv',
-    '/app/.venv/bin/pip install yt-dlp'
+    'python3 -m pip install --upgrade pip',
+    'python3 -m pip install yt-dlp --break-system-packages'
 ]
 
 [start]
