@@ -15,9 +15,29 @@ const dl = require('./dl');
 
 const app = express();
 const userState = new Map();
+
+// --- CONFIGURACIÓN DE RUTAS Y ENTORNO ---
 const AUTH_DIR = 'auth';
-const LOGS_FILE = 'data/logs.json';
 const DATA_DIR = 'data';
+const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
+
+// Detectar si estamos en Railway o en Windows (Local)
+const isRailway = process.env.RAILWAY_ENVIRONMENT === 'production';
+// En Railway usamos el Python del entorno virtual, en PC el global
+const pythonPath = isRailway ? '/app/.venv/bin/python' : 'python';
+
+// Asegurar que las carpetas existan para evitar errores de escritura
+if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR);
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
+
+// --- EJEMPLO DE CÓMO USAR EL SPAWN CORREGIDO ---
+// Cuando necesites llamar a tu main.py, hazlo así:
+/*
+const pythonProcess = spawn(pythonPath, ['main.py', argumento1, argumento2]);
+*/
+
+console.log(`[SISTEMA] Entorno: ${isRailway ? 'Railway' : 'Local (Windows)'}`);
+console.log(`[SISTEMA] Usando Python en: ${pythonPath}`);
 
 let sock;
 let qrCodeData = null;
